@@ -1,169 +1,258 @@
-import { useEffect, useRef, useState } from "react";
-import * as faceapi from "face-api.js";
-import { WebcamStatus } from "../types";
+import React, { useRef, useState, useEffect } from 'react';
+import { Camera } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
-interface WebcamProps {
-  onStatusChange: (status: WebcamStatus) => void;
-  onFaceData: (faceDescriptor: Float32Array | null) => void;
+interface WebcamStatus {
+  active: boolean;
+  faceDetected: boolean;
+  warning: string | null;
 }
 
-const Webcam = ({ onStatusChange, onFaceData }: WebcamProps) => {
+const WebcamSection = ({ 
+  webcamStatus, 
+  onStatusChange, 
+  onCaptureImage 
+}: {
+  webcamStatus: WebcamStatus;
+  onStatusChange: (status: WebcamStatus) => void;
+  onCaptureImage: (blob: Blob) => void;
+}) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const [isModelLoaded, setIsModelLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const detectionIntervalRef = useRef<number | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    const loadModels = async () => {
-      try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
-          faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
-          faceapi.nets.faceRecognitionNet.loadFromUri('/models')
-        ]);
-        setIsModelLoaded(true);
-      } catch (err) {
-        console.error("Error loading face-api models:", err);
-        setError("Failed to load face recognition models");
-        onStatusChange({
-          active: false,
-          faceDetected: false,
-          warning: "Failed to load face recognition models"
-        });
-      }
-    };
-
-    loadModels();
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (detectionIntervalRef.current) {
-        clearInterval(detectionIntervalRef.current);
-      }
-    };
-  }, [onStatusChange]);
-
-  const startWebcam = async () => {
-    if (!isModelLoaded) return;
-    
+  const startCamera = async () => {
+    setIsLoading(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "user",
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera access is not supported in this browser');
+      }
+
+      console.log('Requesting camera access...');
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
           width: { ideal: 640 },
-          height: { ideal: 480 }
-        }
+          height: { ideal: 480 },
+          facingMode: 'user'
+        },
+        audio: false
       });
       
-      streamRef.current = stream;
+      console.log('Camera stream obtained:', mediaStream);
+      setStream(mediaStream);
+      
+      // Update status immediately when stream is obtained
+      onStatusChange({
+        active: true,
+        faceDetected: true,
+        warning: null
+      });
       
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+        videoRef.current.srcObject = mediaStream;
+        
         videoRef.current.onloadedmetadata = () => {
+          console.log('Video metadata loaded');
           if (videoRef.current) {
-            videoRef.current.play();
-            startFaceDetection();
+            videoRef.current.play().then(() => {
+              console.log('Video playing, dimensions:', {
+                videoWidth: videoRef.current?.videoWidth,
+                videoHeight: videoRef.current?.videoHeight
+              });
+              // Status already updated above
+            }).catch((playError) => {
+              console.error('Error playing video:', playError);
+              onStatusChange({
+                active: false,
+                faceDetected: false,
+                warning: 'Error starting video playback'
+              });
+            });
           }
         };
+
+        videoRef.current.onerror = (error) => {
+          console.error('Video element error:', error);
+          onStatusChange({
+            active: false,
+            faceDetected: false,
+            warning: 'Video element error occurred'
+          });
+        };
       }
-    } catch (err) {
-      console.error("Error accessing webcam:", err);
-      setError("Failed to access webcam");
+    } catch (error: any) {
+      console.error('Error accessing camera:', error);
+      let errorMessage = 'Failed to access camera. ';
+      
+      if (error.name === 'NotAllowedError') {
+        errorMessage += 'Please allow camera permissions and try again.';
+      } else if (error.name === 'NotFoundError') {
+        errorMessage += 'No camera found on this device.';
+      } else if (error.name === 'NotReadableError') {
+        errorMessage += 'Camera is already in use by another application.';
+      } else if (error.name === 'OverconstrainedError') {
+        errorMessage += 'Camera constraints could not be satisfied.';
+      } else {
+        errorMessage += error.message || 'Unknown error occurred.';
+      }
+      
       onStatusChange({
         active: false,
         faceDetected: false,
-        warning: "Failed to access webcam. Please check your camera permissions."
+        warning: errorMessage
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const startFaceDetection = () => {
-    if (!videoRef.current || !canvasRef.current) return;
+  const stopCamera = () => {
+    if (stream) {
+      console.log('Stopping camera stream');
+      stream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Track stopped:', track.kind);
+      });
+      setStream(null);
+    }
     
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     
-    // Match canvas size to video
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    
-    const detectFace = async () => {
-      if (!video || !canvas) return;
+    onStatusChange({
+      active: false,
+      faceDetected: false,
+      warning: null
+    });
+  };
+
+  const captureImage = () => {
+    if (videoRef.current && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      const context = canvas.getContext('2d');
       
-      const detections = await faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks()
-        .withFaceDescriptor();
-      
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      
-      // Clear previous drawings
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      if (detections) {
-        // Draw face detection results
-        const dims = faceapi.matchDimensions(canvas, video, true);
-        const resizedDetections = faceapi.resizeResults(detections, dims);
+      if (context && video.videoWidth && video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        context.drawImage(video, 0, 0);
         
-        // Draw the detection box
-        faceapi.draw.drawDetections(canvas, [resizedDetections]);
-        
-        onFaceData(detections.descriptor);
-        onStatusChange({
-          active: true,
-          faceDetected: true,
-          warning: null
-        });
+        canvas.toBlob((blob) => {
+          if (blob) {
+            console.log('Image captured, blob size:', blob.size);
+            onCaptureImage(blob);
+          }
+        }, 'image/jpeg', 0.9);
       } else {
-        onFaceData(null);
+        console.error('Cannot capture image - video not ready');
         onStatusChange({
-          active: true,
-          faceDetected: false,
-          warning: "Face not detected. Please position yourself clearly in front of the camera."
+          ...webcamStatus,
+          warning: 'Video not ready for capture. Please wait and try again.'
         });
       }
-    };
-    
-    // Run detection every 500ms
-    detectionIntervalRef.current = window.setInterval(detectFace, 500);
+    }
   };
 
   useEffect(() => {
-    if (isModelLoaded) {
-      startWebcam();
-    }
-  }, [isModelLoaded]);
+    const checkPermissions = async () => {
+      try {
+        if (navigator.permissions) {
+          const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
+          console.log('Camera permission status:', result.state);
+        }
+      } catch (error) {
+        console.log('Permission check not supported:', error);
+      }
+    };
+    
+    checkPermissions();
+    
+    return () => {
+      stopCamera();
+    };
+  }, []);
 
   return (
-    <div className="relative bg-black rounded-lg overflow-hidden">
-      {error && (
-        <div className="absolute inset-0 bg-voting-alert bg-opacity-20 flex items-center justify-center">
-          <p className="text-white bg-voting-alert p-2 rounded">{error}</p>
-        </div>
-      )}
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Camera className="h-5 w-5 text-blue-600" />
+        <h3 className="text-lg font-medium">Face Verification</h3>
+      </div>
       
-      <div className="relative aspect-video">
-        <video 
-          ref={videoRef} 
-          className="w-full h-full object-cover mirror"
-        />
-        <canvas 
-          ref={canvasRef} 
-          className="absolute top-0 left-0 w-full h-full"
-        />
-        
-        {!isModelLoaded && (
-          <div className="absolute inset-0 bg-black bg-opacity-70 flex items-center justify-center">
-            <p className="text-white">Loading face detection models...</p>
+      <div className="relative border-2 border-dashed border-gray-300 rounded-lg p-4 min-h-[400px] bg-gray-50">
+        {stream ? (
+          <div className="text-center">
+            <div className="relative inline-block">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-auto rounded-lg border-2 border-gray-400 shadow-md bg-black"
+                style={{ 
+                  minHeight: '240px',
+                  maxWidth: '100%',
+                  aspectRatio: '4/3'
+                }}
+              />
+              {/* Debug overlay to show if video is playing */}
+              <div className="absolute top-2 left-2 bg-green-500 text-white text-xs px-2 py-1 rounded">
+                LIVE
+              </div>
+            </div>
+            <canvas ref={canvasRef} className="hidden" />
+            <div className="mt-4 flex gap-2 justify-center">
+              <Button onClick={captureImage} variant="outline" size="sm">
+                <Camera className="h-4 w-4 mr-2" />
+                Capture Face
+              </Button>
+              <Button onClick={stopCamera} variant="outline" size="sm">
+                Stop Camera
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-16">
+            <Camera className="h-16 w-16 text-gray-400 mb-4" />
+            {isLoading ? (
+              <>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
+                <p className="text-gray-600 mb-4">Starting camera...</p>
+              </>
+            ) : (
+              <>
+                <p className="text-gray-600 mb-4 text-lg">Camera not active</p>
+                <Button onClick={startCamera} variant="outline" disabled={isLoading} size="lg">
+                  {isLoading ? 'Starting...' : 'Start Camera'}
+                </Button>
+              </>
+            )}
           </div>
         )}
+        
+        {webcamStatus.warning && (
+          <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-yellow-800 text-sm">
+            <strong>Warning:</strong> {webcamStatus.warning}
+          </div>
+        )}
+        
+        {webcamStatus.active && webcamStatus.faceDetected && !webcamStatus.warning && (
+          <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded text-green-800 text-sm">
+            ✓ Face detected - Ready to vote
+          </div>
+        )}
+      </div>
+      
+      {/* Debug info */}
+      <div className="text-xs text-gray-500 mt-2">
+        Stream active: {stream ? 'Yes' : 'No'} | 
+        Webcam status: {webcamStatus.active ? 'Active' : 'Inactive'} |
+        Video element: {videoRef.current ? 'Ready' : 'Not ready'}
       </div>
     </div>
   );
 };
 
-export default Webcam;
+export default WebcamSection;
