@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -6,21 +6,25 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/services/database";
+import { faceEmbeddingExtractor } from "@/services/faceEmbeddingExtractor";
 import { Voter } from "@/types";
+import { VoterImageCapture } from "./VoterImageCapture";
 
 export const VoterManagement = () => {
   const [name, setName] = useState("");
   const [voterId, setVoterId] = useState("");
   const [selectedSlot, setSelectedSlot] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
   const slots = db.getSlots();
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setImageFile(e.target.files[0]);
-    }
+  const handleImageCapture = (file: File) => {
+    setImageFile(file);
+  };
+
+  const handleClearImage = () => {
+    setImageFile(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -35,9 +39,23 @@ export const VoterManagement = () => {
       return;
     }
 
+    setIsProcessing(true);
+
     try {
-      // Here you would typically upload the image to your API
-      // For now, we'll create a temporary URL
+      // Extract face embedding from the uploaded image
+      const faceEmbedding = await faceEmbeddingExtractor.extractEmbeddingFromFile(imageFile);
+      
+      if (!faceEmbedding) {
+        toast({
+          title: "No face detected",
+          description: "Could not detect a face in the uploaded image. Please upload a clear photo showing your face.",
+          variant: "destructive",
+        });
+        setIsProcessing(false);
+        return;
+      }
+
+      // Create a temporary URL for display purposes
       const imageUrl = URL.createObjectURL(imageFile);
 
       const newVoter: Voter = {
@@ -46,29 +64,30 @@ export const VoterManagement = () => {
         voterId,
         slotId: selectedSlot,
         imageUrl,
-        voted: false
+        voted: false,
+        faceEmbedding: faceEmbeddingExtractor.convertToStorageFormat(faceEmbedding)
       };
 
       db.addVoter(newVoter);
 
       toast({
         title: "Success",
-        description: "Voter has been added successfully",
+        description: "Voter has been added successfully with face verification enabled",
       });
 
       setName("");
       setVoterId("");
       setSelectedSlot("");
       setImageFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
     } catch (error) {
+      console.error("Error adding voter:", error);
       toast({
         title: "Error",
-        description: "Failed to add voter. Please try again.",
+        description: "Failed to process voter image. Please try again.",
         variant: "destructive",
       });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -115,24 +134,15 @@ export const VoterManagement = () => {
             </Select>
           </div>
           
-          <div>
-            <Label htmlFor="image">Voter Image</Label>
-            <Input
-              ref={fileInputRef}
-              id="image"
-              type="file"
-              accept="image/*"
-              onChange={handleImageChange}
-              className="cursor-pointer"
-            />
-            {imageFile && (
-              <p className="mt-2 text-sm text-gray-500">
-                Selected file: {imageFile.name}
-              </p>
-            )}
-          </div>
+          <VoterImageCapture
+            onImageCapture={handleImageCapture}
+            currentImage={imageFile}
+            onClearImage={handleClearImage}
+          />
           
-          <Button type="submit">Add Voter</Button>
+          <Button type="submit" disabled={isProcessing}>
+            {isProcessing ? "Processing..." : "Add Voter"}
+          </Button>
         </form>
       </CardContent>
     </Card>

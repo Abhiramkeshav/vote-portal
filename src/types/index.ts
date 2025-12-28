@@ -6,6 +6,7 @@ export interface Voter {
   slotId: string;
   voted: boolean;
   timestamp?: string;
+  faceEmbedding?: number[]; // Face descriptor stored as array for localStorage compatibility
 }
 
 export interface Candidate {

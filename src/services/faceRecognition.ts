@@ -1,5 +1,5 @@
-// Simple face recognition service
-// In a production environment, this would use proper face comparison algorithms
+// Face recognition service for voter verification
+// Handles both duplicate detection and voter identity verification
 
 export class FaceRecognitionService {
   private storedFaces: { descriptor: Float32Array; voterId: string }[] = [];
@@ -162,6 +162,45 @@ export class FaceRecognitionService {
       );
       return null;
     }
+  }
+
+  /**
+   * Verify that the live face matches the registered face for a specific voter
+   * @param liveDescriptor - Face descriptor from live camera capture
+   * @param registeredEmbedding - Stored face embedding from voter registration
+   * @param threshold - Similarity threshold (lower = stricter, default 0.6)
+   * @returns Object with match status and similarity distance
+   */
+  public verifyVoterIdentity(
+    liveDescriptor: Float32Array,
+    registeredEmbedding: number[],
+    threshold: number = 0.6
+  ): { isMatch: boolean; distance: number } {
+    if (!liveDescriptor || !registeredEmbedding) {
+      console.error("Invalid descriptors for verification");
+      return { isMatch: false, distance: Infinity };
+    }
+
+    const registeredDescriptor = new Float32Array(registeredEmbedding);
+    const distance = this.calculateDistance(liveDescriptor, registeredDescriptor);
+
+    console.log(
+      `Voter identity verification: distance ${distance.toFixed(4)} (threshold: ${threshold})`
+    );
+
+    const isMatch = distance < threshold;
+
+    if (isMatch) {
+      console.log("✅ Voter identity verified successfully");
+    } else {
+      console.log(
+        `❌ Voter identity verification failed. Distance ${distance.toFixed(
+          4
+        )} > threshold ${threshold}`
+      );
+    }
+
+    return { isMatch, distance };
   }
 
   /**

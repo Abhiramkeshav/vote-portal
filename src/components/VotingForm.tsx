@@ -75,21 +75,67 @@ const VotingForm = () => {
       return;
     }
 
-    // Check for duplicate face only when submitting
-    if (currentFaceDescriptor) {
-      const matchedVoterId = faceRecognition.recognizeFace(currentFaceDescriptor);
+    if (!currentFaceDescriptor) {
+      toast({
+        title: "Face data missing",
+        description: "Could not capture face data. Please ensure your face is clearly visible.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Step 1: Check if this voter ID exists and get their registered face embedding
+    const registeredVoter = db.getVoterByVoterId(voterId);
+    
+    if (!registeredVoter) {
+      toast({
+        title: "Voter not found",
+        description: "This voter ID is not registered. Please check your voter ID.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Step 2: Verify the live face matches the registered voter's face
+    if (registeredVoter.faceEmbedding) {
+      const verificationResult = faceRecognition.verifyVoterIdentity(
+        currentFaceDescriptor,
+        registeredVoter.faceEmbedding,
+        0.6 // Threshold for identity verification
+      );
+
+      if (!verificationResult.isMatch) {
+        toast({
+          title: "Identity verification failed",
+          description: "The face detected does not match the registered voter. Please ensure the correct person is voting.",
+          variant: "destructive",
+        });
+        console.log(`Identity mismatch: distance ${verificationResult.distance.toFixed(4)}`);
+        return;
+      }
       
-      if (matchedVoterId) {
-        const voter = db.getVoterByVoterId(matchedVoterId);
-        if (voter && voter.voted) {
-          setDuplicateVoterDetected(matchedVoterId);
-          toast({
-            title: "Duplicate voter detected",
-            description: `A previous vote has been detected for voter ID: ${matchedVoterId}`,
-            variant: "destructive",
-          });
-          return;
-        }
+      console.log(`✅ Identity verified: distance ${verificationResult.distance.toFixed(4)}`);
+    } else {
+      // Voter exists but no face embedding (legacy voter)
+      toast({
+        title: "Warning",
+        description: "This voter was registered without face verification. Proceeding with caution.",
+      });
+    }
+
+    // Step 3: Check for duplicate voting (face already voted before)
+    const matchedVoterId = faceRecognition.recognizeFace(currentFaceDescriptor);
+    
+    if (matchedVoterId) {
+      const voter = db.getVoterByVoterId(matchedVoterId);
+      if (voter && voter.voted) {
+        setDuplicateVoterDetected(matchedVoterId);
+        toast({
+          title: "Duplicate voter detected",
+          description: `A previous vote has been detected for voter ID: ${matchedVoterId}`,
+          variant: "destructive",
+        });
+        return;
       }
     }
 
@@ -105,8 +151,11 @@ const VotingForm = () => {
     setIsSubmitting(true);
 
     const voter: Voter = {
+      id: crypto.randomUUID(),
       name,
       voterId,
+      imageUrl: "",
+      slotId: "",
       voted: false
     };
 
